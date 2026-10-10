@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { ChatHost, SETTINGS_PANEL_TYPE } from "./ChatHost";
 import { AGENT_PATH_KEY } from "./platform";
 import { DEFAULT_SAFE_LIST } from "./session/approvals";
+import { acpSessionsDirCandidates } from "./session/forkStore";
 import type { ApprovalPolicy, McpStatus } from "../shared/protocol";
 import { DIFF_SCHEME, DiffContentProvider } from "./DiffContentProvider";
 import { SessionRuntime, type AgentLaunchConfig, type SessionMeta } from "./session/SessionRuntime";
@@ -174,6 +175,11 @@ export function activate(context: vscode.ExtensionContext): void {
     // Every launch (startup resume, history list, reconnect) waits for the PATH lookup inside the runtime,
     // so the startup resume below can be queued at once, ahead of anything a view asks for.
     beforeConnect: () => envReady,
+    getSessionsDirs: () => {
+      const launch = launchConfig();
+      const configDir = vscode.workspace.getConfiguration("cursorAcp").get<string>("configDir", "");
+      return acpSessionsDirCandidates(launch.env, [sync.agentCursorDir(launch).cursorDir, configDir]);
+    },
     storage,
     log: runtimeLogger,
     events: {

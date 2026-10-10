@@ -1128,7 +1128,8 @@ button.chip:disabled {
     animation: none;
   }
   .usage-bar-fill,
-  .md-code-copy {
+  .md-code-copy,
+  .turn-actions {
     transition: none;
   }
 }
@@ -1709,6 +1710,32 @@ button.chip:disabled {
 .turn-end.reason-error .codicon,
 .turn-end.reason-refusal .codicon {
   color: var(--red);
+}
+/* Always shown, muted until the turn is hovered or the button has focus. */
+.turn-actions {
+  display: flex;
+  gap: 2px;
+  margin-top: -2px;
+  opacity: 0.55;
+  transition: opacity 80ms;
+}
+.turn-actions .icon-button {
+  width: 20px;
+  height: 20px;
+  color: var(--muted);
+}
+.turn-actions .codicon {
+  font-size: 14px;
+}
+.turn-actions .icon-button:disabled {
+  opacity: 0.5;
+}
+.agent-turn:hover .turn-actions,
+.turn-actions:focus-within {
+  opacity: 1;
+}
+.turn-actions .icon-button:hover:not(:disabled) {
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
 }
 .divider {
   display: flex;

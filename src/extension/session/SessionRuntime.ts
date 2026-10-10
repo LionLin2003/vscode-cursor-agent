@@ -10,8 +10,9 @@ import { randomUUID } from "node:crypto";
 import { AcpConnection, type AcpClientHandlers, type CursorAskQuestionRequest, type CursorAskQuestionResponse, type CursorAvailableModel, type CursorCreatePlanRequest, type CursorCreatePlanResponse, type CursorUpdateTodosRequest } from "../acp/AcpConnection";
 import { AgentProcess, AgentProcessError } from "../acp/AgentProcess";
 import { JsonRpcClosedError, JsonRpcRemoteError, type JsonRpcLogger } from "../acp/jsonrpc";
-import type { ApprovalPolicy, ConfigOption, ConnectionState, ExtensionToWebview, PermissionOption, PromptAttachmentInput, Question, QuestionAnswer, SessionState, SessionSummary, ToolItem, UserAttachment } from "../../shared/protocol";
+import type { ApprovalPolicy, ConfigOption, ConnectionState, ExtensionToWebview, PermissionOption, PromptAttachmentInput, Question, QuestionAnswer, SessionState, SessionSummary, ToolItem, UserAttachment, UserItem } from "../../shared/protocol";
 import { compileSafeList, isSafe, sessionKey, subjectFrom, type CompiledSafeList, type PermissionSubject } from "./approvals";
+import { acpSessionsDirCandidates, findSessionDir, forkSession } from "./forkStore";
 import { ThreadModel, isRecord } from "./ThreadModel";
 
 export interface AgentLaunchConfig {
@@ -91,6 +92,8 @@ export interface SessionRuntimeOptions {
    * Starts can therefore be requested right away: they queue in order instead of racing the wait.
    */
   readonly beforeConnect?: () => Promise<void>;
+  /** Folders that may hold Cursor's `acp-sessions` (for forking); defaults to the CLI's own lookup on the launch env. */
+  readonly getSessionsDirs?: () => ReadonlyArray<string>;
   readonly storage: RuntimeStorage;
   readonly log: RuntimeLogger;
   readonly events: RuntimeEvents;
@@ -229,6 +232,9 @@ export class SessionRuntime {
   /** Bumped by every teardown; a start that began in an older epoch was superseded and fails silently. */
   private teardownEpoch = 0;
   private publishScheduled = false;
+  /** Divider text for the next successful session/load, in place of "Resumed session". */
+  private loadDivider: string | undefined;
+  private forking = false;
   private modelOptionsMemo: { key: string; catalog: ReadonlyArray<CursorAvailableModel>; live: ReadonlyArray<ConfigOption>; overridesVersion: number; value: ConfigOption[] } | undefined;
   private overridesVersion = 0;
 
@@ -659,8 +665,10 @@ export class SessionRuntime {
     }
     this.model.setReplay(false);
     this.applySessionSetup(response);
+    const divider = this.loadDivider ?? "Resumed session";
+    this.loadDivider = undefined;
     if (this.model.getItems().length > 0) {
-      this.model.addDivider("Resumed session");
+      this.model.addDivider(divider);
     }
     this.options.storage.setLastSessionId(sessionId);
     this.setConnectionState("ready");
@@ -806,6 +814,42 @@ export class SessionRuntime {
   async loadSession(sessionId: string): Promise<void> {
     if (this.isRunning) await this.cancel();
     await this.start(sessionId);
+  }
+
+  /**
+   * Copies the current session up to the end of the agent turn that answered a user message, and
+   * opens the copy. The current session is left as it is.
+   */
+  async forkAfterTurn(userItemId: string): Promise<void> {
+    if (this.forking) throw new Error("A fork is already in progress.");
+    this.forking = true;
+    try {
+      await this.settleStart();
+      if (this.isRunning) throw new Error("Stop the current turn before forking.");
+      const sessionId = this.sessionId;
+      if (!sessionId || !this.sessionPersisted) throw new Error("This session has not been saved by Cursor yet.");
+      const users = this.model.getItems().filter((i): i is UserItem => i.type === "user");
+      const index = users.findIndex((u) => u.id === userItemId);
+      const item = users[index];
+      if (!item) throw new Error("That message is no longer in the transcript.");
+      const dirs = this.options.getSessionsDirs?.() ?? acpSessionsDirCandidates(this.options.getLaunchConfig().env);
+      const sessionsDir = findSessionDir(dirs, sessionId);
+      if (!sessionsDir) throw new Error(`Cursor's saved copy of this session was not found (looked in ${dirs.join(", ")}).`);
+      const title = this.effectiveTitle();
+      const fork = await forkSession({ sessionsDir, sessionId, turnIndex: index, text: item.text, shownCount: users.length, ...(title ? { title } : {}) });
+      this.options.log.info(`Forked session ${sessionId} after turn ${fork.turnIndex + 1} as ${fork.sessionId} (${fork.title})`);
+      const meta = this.options.storage.getSessionMeta();
+      const prefs = meta.models?.[sessionId];
+      if (prefs) this.options.storage.setSessionMeta({ ...meta, models: { ...meta.models, [fork.sessionId]: prefs } });
+      this.loadDivider = title ? `Forked from “${title}”` : "Forked session";
+      try {
+        await this.start(fork.sessionId);
+      } finally {
+        this.loadDivider = undefined;
+      }
+    } finally {
+      this.forking = false;
+    }
   }
 
   /**
