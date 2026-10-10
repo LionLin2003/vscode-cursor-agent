@@ -19,10 +19,59 @@
  *   FAKE_AGENT_LOAD_DELAY_MS=n    delay before the session/load response (default 20)
  *   FAKE_AGENT_NEW_DELAY_MS=n     delay before the session/new response (default 0)
  *   FAKE_AGENT_STORE=<file.json>  keeps sessions in this file, so they survive a restart (like Cursor's own store)
+ *   CURSOR_CONFIG_DIR=<dir>       session/load of an unknown id replays the turns of <dir>/acp-sessions/<id>/store.db
  */
 import readline from "node:readline";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+
+/** The user texts of a session in Cursor's own store layout (see src/extension/session/forkStore.ts). */
+function storedTurns(sessionId) {
+  const dir = process.env.CURSOR_CONFIG_DIR;
+  const path = dir && join(dir, "acp-sessions", sessionId, "store.db");
+  if (!path || !existsSync(path)) return undefined;
+  const fields = (bytes) => {
+    const out = [];
+    let i = 0;
+    const varint = () => {
+      let n = 0;
+      let scale = 1;
+      for (;;) {
+        const b = bytes[i++];
+        n += (b & 0x7f) * scale;
+        if (!(b & 0x80)) return n;
+        scale *= 128;
+      }
+    };
+    while (i < bytes.length) {
+      const key = varint();
+      if (key % 8 === 0) out.push([Math.floor(key / 8), varint()]);
+      else {
+        const length = varint();
+        out.push([Math.floor(key / 8), bytes.subarray(i, i + length)]);
+        i += length;
+      }
+    }
+    return out;
+  };
+  const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    const blob = (id) => db.prepare("SELECT data FROM blobs WHERE id = ?").get(Buffer.from(id).toString("hex")).data;
+    const meta = JSON.parse(Buffer.from(db.prepare("SELECT value FROM meta WHERE key = '0'").get().value, "hex").toString());
+    const root = fields(db.prepare("SELECT data FROM blobs WHERE id = ?").get(meta.latestRootBlobId).data);
+    return root
+      .filter(([f]) => f === 8)
+      .map(([, turnRef]) => {
+        const turn = fields(fields(blob(turnRef)).find(([f]) => f === 1)[1]);
+        const prompt = fields(blob(turn.find(([f]) => f === 1)[1]));
+        return Buffer.from(prompt.find(([f]) => f === 1)[1]).toString();
+      });
+  } finally {
+    db.close();
+  }
+}
 
 const STORE = process.env.FAKE_AGENT_STORE;
 function readStore() {
@@ -290,6 +339,11 @@ rl.on("line", (line) => {
       reply({ sessions: Array.from(sessions, ([sessionId, s]) => ({ sessionId, cwd: s.cwd, title: s.title ?? "Untitled", updatedAt: new Date().toISOString() })) });
       return;
     case "session/load": {
+      if (!sessions.has(params.sessionId)) {
+        const turns = storedTurns(params.sessionId);
+        const history = turns?.flatMap((text) => [{ role: "user", text }, { role: "assistant", text: `Echo: ${text}!` }]);
+        if (history) sessions.set(params.sessionId, { cwd: params.cwd, history, mode: "agent", model: "model-a", title: undefined, mcpServers: [] });
+      }
       const s = sessions.get(params.sessionId);
       if (!s) {
         send({ jsonrpc: "2.0", id, error: { code: -32002, message: "Session not found" } });

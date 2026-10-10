@@ -117,4 +117,43 @@ describe.skipIf(!enabled)("real Cursor agent", () => {
     }
     expect(runtime.state.models?.currentModelId).toBe(original);
   }, 300_000);
+
+  it("forks a session after a reply: the copy remembers only the turns up to it, the source keeps all", async () => {
+    const runtime = make();
+    runtimes.push(runtime);
+    await runtime.start();
+    const markers = ["ALPHA-1", "BETA-2", "GAMMA-3"];
+    for (const marker of markers) {
+      await runtime.prompt(`Remember the marker ${marker}. Do not use any tools. Reply with exactly: OK`, []);
+      expect(runtime.state.connection, logs.join("\n")).toBe("ready");
+    }
+    const source = runtime.state.sessionId!;
+    const users = () => runtime.model.getItems().filter((i): i is Extract<ThreadItem, { type: "user" }> => i.type === "user");
+    const lastReply = () => [...runtime.model.getItems()].reverse().find((i): i is Extract<ThreadItem, { type: "assistant" }> => i.type === "assistant")?.text ?? "";
+    const recall = "List every marker I asked you to remember in this conversation, comma-separated, nothing else. Do not use any tools.";
+
+    // After the second reply: ALPHA and BETA, no GAMMA.
+    await runtime.forkAfterTurn(users()[1]!.id);
+    const fork = runtime.state.sessionId!;
+    expect(fork).not.toBe(source);
+    expect(runtime.state.connection, logs.join("\n")).toBe("ready");
+    expect(users()).toHaveLength(2);
+    expect(users().map((u) => u.text).join("\n")).toMatch(/ALPHA-1[\s\S]*BETA-2/);
+    await runtime.prompt(recall, []);
+    expect(lastReply()).toContain("ALPHA-1");
+    expect(lastReply()).toContain("BETA-2");
+    expect(lastReply()).not.toContain("GAMMA-3");
+    expect((await runtime.listSessions()).find((s) => s.sessionId === fork)?.title).toMatch(/\(fork\)$/);
+
+    // Forking the fork after its last reply copies all of it, including the turn just sent.
+    await runtime.forkAfterTurn(users()[2]!.id);
+    expect(runtime.state.connection, logs.join("\n")).toBe("ready");
+    expect(runtime.state.sessionId).not.toBe(fork);
+    expect(users()).toHaveLength(3);
+    expect(lastReply()).toContain("BETA-2");
+
+    await runtime.loadSession(source);
+    expect(users().map((u) => u.text).join("\n")).toMatch(/ALPHA-1[\s\S]*BETA-2[\s\S]*GAMMA-3/);
+    expect(users()).toHaveLength(3);
+  }, 300_000);
 });

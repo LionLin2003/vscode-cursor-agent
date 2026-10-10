@@ -2,34 +2,24 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/ho
 import { findPendingPermission, getState, subscribe, useSelector, type StoreState } from "../store";
 import { ItemView } from "./items/ItemView";
 import { respondToPermission } from "./items/Permission";
-import { Icon, prefersReducedMotion } from "./ui";
+import { Icon, IconButton, prefersReducedMotion } from "./ui";
 import { Welcome } from "./Welcome";
+import { post } from "../vscode";
+import { groupIds } from "../turnGroups";
 
-type Group = { key: string; kind: "user" | "agent" | "solo"; ids: string[] };
-
-/** Group consecutive agent-side items into one "turn" so they share a gutter. */
-function groupIds(ids: ReadonlyArray<string>): Group[] {
-  const items = getState().items;
-  const groups: Group[] = [];
-  let current: Group | null = null;
-  for (const id of ids) {
-    const it = items.get(id);
-    if (!it) continue;
-    if (it.type === "user") {
-      current = null;
-      groups.push({ key: id, kind: "user", ids: [id] });
-    } else if (it.type === "notice" || it.type === "divider") {
-      current = null;
-      groups.push({ key: id, kind: "solo", ids: [id] });
-    } else {
-      if (!current || current.kind !== "agent") {
-        current = { key: id, kind: "agent", ids: [] };
-        groups.push(current);
-      }
-      current.ids.push(id);
-    }
-  }
-  return groups;
+function TurnActions({ userItemId }: { userItemId: string }) {
+  // Only a finished turn can be forked: mid-turn, Cursor has not saved where it ends.
+  const canFork = useSelector((s) => !!s.session.sessionId && s.session.connection === "ready");
+  return (
+    <div class="turn-actions">
+      <IconButton
+        icon="repo-forked"
+        label={canFork ? "Fork from here: a new chat with the conversation up to this reply" : "Fork from here (once the turn has finished)"}
+        disabled={!canFork}
+        onClick={() => post({ type: "session.fork", userItemId })}
+      />
+    </div>
+  );
 }
 
 const BOTTOM_THRESHOLD = 48;
@@ -43,7 +33,7 @@ export function Transcript() {
   const ids = useSelector((s) => s.ids);
   const resetSeq = useSelector((s) => s.resetSeq);
   const ready = useSelector((s) => s.ready);
-  const groups = useMemo(() => groupIds(ids), [ids]);
+  const groups = useMemo(() => groupIds(ids, getState().items), [ids]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -165,6 +155,7 @@ export function Transcript() {
                     {g.ids.map((id) => (
                       <ItemView key={id} id={id} />
                     ))}
+                    {g.forkFrom && <TurnActions userItemId={g.forkFrom} />}
                   </div>
                 </div>
               ) : (

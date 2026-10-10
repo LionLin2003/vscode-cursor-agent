@@ -38,4 +38,8 @@ npm test
 
 ---
 
-**Note:** No support provided, no contributions accepted. If something doesn't work or you would like changes, [fork it on GitHub](https://github.com/erebusdev/vscode-cursor-agent) and modify it for your own use.
+## Contributing
+
+Issues and pull requests are welcome at [LionLin2003/vscode-cursor-agent](https://github.com/LionLin2003/vscode-cursor-agent). Before opening a pull request, run `npm run typecheck` and `npm test`.
+
+This project is a fork of [erebusdev/vscode-cursor-agent](https://github.com/erebusdev/vscode-cursor-agent).

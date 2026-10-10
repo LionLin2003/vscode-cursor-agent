@@ -5,6 +5,9 @@ import { dirname, join } from "node:path";
 import type { ExtensionToWebview, ThreadItem, ToolItem } from "../src/shared/protocol";
 import { SessionRuntime, type AgentLaunchHooks, type ModelPreferences, type SessionMeta } from "../src/extension/session/SessionRuntime";
 import { detectProcessHome } from "../src/extension/pluginSync";
+import { readSessionTurns } from "../src/extension/session/forkStore";
+import { buildSession } from "./fixtures/cursorStore";
+import { groupIds } from "../src/webview/turnGroups";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -423,6 +426,80 @@ describe("SessionRuntime against a fake ACP agent", () => {
     expect(replayed[0]?.replay).toBe(true);
     expect((replayed[1] as Extract<ThreadItem, { type: "assistant" }>).streaming).toBe(false);
     expect((replayed[1] as Extract<ThreadItem, { type: "assistant" }>).text).toBe("Echo: first!");
+  });
+
+  it("forks after a turn: opens a copy that ends with that reply, leaving the source as it is", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "fork-config-"));
+    const { runtime, getMeta, getLastSession } = makeRuntime({ CURSOR_CONFIG_DIR: configDir });
+    active.push(runtime);
+    try {
+      await runtime.start();
+      await expect(runtime.forkAfterTurn("user-1")).rejects.toThrow(/not been saved/);
+      const prompts = ["one", "two", "three"];
+      for (const text of prompts) await runtime.prompt(text, []);
+      await runtime.setModel("model-b");
+      const source = runtime.state.sessionId!;
+      // What Cursor itself would have on disk for this session.
+      buildSession(join(configDir, "acp-sessions"), source, prompts, "Numbers");
+
+      await expect(runtime.forkAfterTurn("no-such-item")).rejects.toThrow(/no longer in the transcript/);
+      const second = items(runtime).filter((i) => i.type === "user")[1]!;
+      await runtime.forkAfterTurn(second.id);
+
+      const forkId = runtime.state.sessionId!;
+      expect(forkId).not.toBe(source);
+      expect(runtime.state.connection).toBe("ready");
+      expect(getLastSession()).toBe(forkId);
+      const shown = items(runtime);
+      expect(shown.filter((i) => i.type === "user").map((i) => (i as Extract<ThreadItem, { type: "user" }>).text)).toEqual(["one", "two"]);
+      expect(lastAssistant(runtime)?.text).toBe("Echo: two!");
+      expect(shown[shown.length - 1]).toMatchObject({ type: "divider", text: "Forked from “Echo three”" });
+      expect(shown.some((i) => i.type === "notice")).toBe(false);
+      // The fork keeps the source's model choice; the source keeps all of its history.
+      expect(getMeta().models?.[forkId]?.modelId).toBe("model-b");
+      expect(runtime.state.models?.currentModelId).toBe("model-b");
+      expect(readSessionTurns(join(configDir, "acp-sessions"), source).map((t) => t.text)).toEqual(prompts);
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
+  it("every finished turn has a fork point, live and after a resume: fork after the first and after the fifth", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "fork-config-"));
+    const { runtime } = makeRuntime({ CURSOR_CONFIG_DIR: configDir });
+    active.push(runtime);
+    const users = () => items(runtime).filter((i): i is Extract<ThreadItem, { type: "user" }> => i.type === "user");
+    // The fork buttons the transcript shows, in order: the user message each one forks after.
+    const forkButtons = () => {
+      const shown = items(runtime);
+      return groupIds(
+        shown.map((i) => i.id),
+        new Map(shown.map((i) => [i.id, i])),
+      ).flatMap((g) => (g.forkFrom ? [g.forkFrom] : []));
+    };
+    try {
+      await runtime.start();
+      const prompts = ["p1", "p2", "p3", "p4", "p5"];
+      for (const text of prompts) await runtime.prompt(text, []);
+      const source = runtime.state.sessionId!;
+      buildSession(join(configDir, "acp-sessions"), source, prompts);
+      expect(forkButtons()).toEqual(users().map((u) => u.id));
+
+      await runtime.forkAfterTurn(forkButtons()[0]!);
+      expect(users().map((u) => u.text)).toEqual(["p1"]);
+      expect(forkButtons()).toHaveLength(1);
+
+      // Back in the source, its replayed history offers all five again.
+      await runtime.loadSession(source);
+      expect(users().map((u) => u.text)).toEqual(prompts);
+      expect(forkButtons()).toEqual(users().map((u) => u.id));
+      await runtime.forkAfterTurn(forkButtons()[4]!);
+      expect(runtime.state.sessionId).not.toBe(source);
+      expect(users().map((u) => u.text)).toEqual(prompts);
+      expect(lastAssistant(runtime)?.text).toBe("Echo: p5!");
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
   });
 
   it("falls back to a new session when the stored session no longer exists", async () => {

@@ -592,6 +592,8 @@ export type WebviewToExtension =
   | { readonly type: "plan.respond"; readonly requestId: string; readonly accepted: boolean; readonly reason?: string }
   | { readonly type: "session.new" }
   | { readonly type: "session.load"; readonly sessionId: string }
+  /** Opens a copy of the session that ends with the agent turn answering this user message. */
+  | { readonly type: "session.fork"; readonly userItemId: string }
   | { readonly type: "session.list" }
   | { readonly type: "session.rename"; readonly sessionId: string; readonly title?: string }
   | { readonly type: "session.hide"; readonly sessionId: string }

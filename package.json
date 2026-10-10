@@ -3,18 +3,18 @@
   "displayName": "Cursor Agent (VSCode ACP)",
   "description": "The Cursor Agent CLI inside VS Code: streaming chat, tool calls, diffs, permissions, sessions.",
   "version": "0.4.0",
-  "publisher": "erebuslabs",
+  "publisher": "lionlin2003",
   "license": "MIT",
   "author": {
-    "name": "Erebus Labs"
+    "name": "LionLin2003"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/erebusdev/vscode-cursor-agent.git"
+    "url": "https://github.com/LionLin2003/vscode-cursor-agent.git"
   },
-  "homepage": "https://github.com/erebusdev/vscode-cursor-agent#readme",
+  "homepage": "https://github.com/LionLin2003/vscode-cursor-agent#readme",
   "bugs": {
-    "url": "https://github.com/erebusdev/vscode-cursor-agent/issues"
+    "url": "https://github.com/LionLin2003/vscode-cursor-agent/issues"
   },
   "private": true,
   "engines": {

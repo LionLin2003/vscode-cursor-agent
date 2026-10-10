@@ -412,6 +412,10 @@ export class ChatHost implements vscode.Disposable {
         case "session.load":
           await this.runtime.loadSession(message.sessionId);
           return;
+        case "session.fork":
+          await this.runtime.forkAfterTurn(message.userItemId);
+          this.send({ type: "composer.focus" });
+          return;
         case "session.list":
           await this.sendSessionList();
           return;
